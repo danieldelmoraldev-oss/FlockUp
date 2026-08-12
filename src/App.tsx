@@ -2,10 +2,11 @@ import { useState } from 'react';
 import Map, { Marker, Source, Layer } from 'react-map-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 
-const MAPBOX_TOKEN = "pk.eyJ1IjoiZGFuaWVsZGVsbW9yYWwtZGV2IiwiYSI6ImNtc3FtMGo3ZDA5eDIyd3I0c2NubWVjYncifQ.3PEe1rF2u7ozEGitryW2vw"; // ⚠️ Pon tu clave pk. aquí
+// Vite utiliza import.meta.env para leer el archivo .env de forma segura
+const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN; 
 
 // Coordenada inicial simulada (Ej: Tu casa o posición actual en Madrid)
-const START_POINT = [-3.7038, 40.4168]; 
+const START_POINT = [-3.7038, 40.4168];
 
 export default function App() {
   const [viewState, setViewState] = useState({
