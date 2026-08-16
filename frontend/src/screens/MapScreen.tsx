@@ -9,7 +9,6 @@ import {
 import { io } from 'socket.io-client';
 
 const mapSocket = io(import.meta.env.VITE_SOCKET_URL);
-
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN; 
 const START_POINT = [-3.7038, 40.4168]; 
 
@@ -22,7 +21,7 @@ const getBearing = (start: number[], end: number[]) => {
   const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(lon2 - lon1);
   return ((Math.atan2(y, x) * (180 / Math.PI)) + 360) % 360;
 };
-// 🔥 1. MAGIA SNAP-TO-ROAD (Debajo de getDistance)
+
 const sqDist = (p1: number[], p2: number[]) => Math.pow(p1[0] - p2[0], 2) + Math.pow(p1[1] - p2[1], 2);
 
 const projectPointOnSegment = (p: number[], v: number[], w: number[]) => {
@@ -51,9 +50,8 @@ const snapToRoute = (gpsPoint: number[], routeCoords: number[][]) => {
     }
   }
 
-  // Si estás a más de ~50 metros de la carretera, te saliste de la ruta. (No hacemos snap)
+  // Desvío de más de ~50 metros
   if (minDist > 0.0000025) return { coords: gpsPoint, bearing: null };
-
   return { coords: snappedPoint, bearing: snappedBearing };
 };
 
@@ -99,10 +97,7 @@ export default function MapScreen({ onOpenAuth, username, onTravelChange, incomi
   const [isPlannerOpen, setIsPlannerOpen] = useState(false);
   
   const [routeData, setRouteData] = useState<{ geometry: any, duration: number, distance: number } | null>(null);
-  
   const [carPosition, setCarPosition] = useState<number[]>(START_POINT);
-  
-  // 🔥 NUEVO: Diccionario para los amigos del Convoy { "Carlos": { coords, bearing, speed } }
   const [convoyMembers, setConvoyMembers] = useState<Record<string, { coords: number[], bearing: number, speed: number }>>({});
   
   const [isTraveling, setIsTraveling] = useState(false);
@@ -112,41 +107,81 @@ export default function MapScreen({ onOpenAuth, username, onTravelChange, incomi
   
   const [isMuted, setIsMuted] = useState(false);
   const [currentSpeed, setCurrentSpeed] = useState(0);
-
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareChats, setShareChats] = useState<any[]>([]);
 
   const mapRef = useRef<any>(null); 
   const userExploringRef = useRef<boolean>(false);
   const autoCenterTimeoutRef = useRef<any>(null);
-  const passedWaypointsRef = useRef<Set<string>>(new Set());
   const isFirstLoadRef = useRef(true);
 
-  // Refs de estado para el GPS real (así no recreamos el Listener de GPS)
+  // 1. REFS PARA EL GPS Y RECÁLCULO
   const isTravelingRef = useRef(isTraveling);
   const activeConvoyRef = useRef(activeConvoy);
-  // 🔥 2. AÑADE ESTA REFERENCIA (Debajo de tus otros useRef)
   const routeDataRef = useRef(routeData);
+  const waypointsRef = useRef(waypoints);
+  const isReroutingRef = useRef(false);
+
   useEffect(() => { routeDataRef.current = routeData; }, [routeData]);
-  
   useEffect(() => { isTravelingRef.current = isTraveling; }, [isTraveling]);
   useEffect(() => { activeConvoyRef.current = activeConvoy; }, [activeConvoy]);
+  useEffect(() => { waypointsRef.current = waypoints; }, [waypoints]);
 
-  // 🔥 1. ESCUCHADOR DEL SOCKET PARA PINTAR AMIGOS
+ // 2. FUNCIÓN DE RECÁLCULO AUTOMÁTICO DE RUTA
+  const recalculateRoute = async (currentLoc: number[]) => {
+    const wps = waypointsRef.current;
+    
+    // 1. Comprobamos que haya ruta
+    if (wps.length < 2) {
+      isReroutingRef.current = false;
+      return;
+    }
+    
+    // 2. Guardamos la coordenada en la variable
+    const destCoords = wps[wps.length - 1].coords;
+    
+    // 3. Comprobamos la variable (ahora TypeScript se fía al 100%)
+    if (!destCoords) {
+      isReroutingRef.current = false;
+      return;
+    }
+    
+    try {
+      setWaypointNotice('📍 Recalculando ruta...');
+      const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${currentLoc[0]},${currentLoc[1]};${destCoords[0]},${destCoords[1]}?geometries=geojson&overview=full&access_token=${MAPBOX_TOKEN}`;
+      const response = await fetch(url);
+      const data = await response.json();
+      
+      if (data.routes && data.routes.length > 0) {
+        setRouteData({
+          geometry: data.routes[0].geometry,
+          duration: data.routes[0].duration,
+          distance: data.routes[0].distance
+        });
+        setWaypointNotice(null);
+      }
+    } catch (error) {
+      console.error("Error recalculando:", error);
+    } finally {
+      // Evitamos saturar la API: Solo recalculamos cada 5 segundos como mucho
+      setTimeout(() => { isReroutingRef.current = false; }, 5000); 
+    }
+  };
+
   useEffect(() => {
     const handleLocationUpdate = (data: any) => {
       if (data.username !== username) {
         setConvoyMembers(prev => ({
           ...prev,
           [data.username]: { coords: data.coords, bearing: data.bearing, speed: data.speed }
-        }));navigator.geolocation.getCurrentPosition
+        }));
       }
     };
     mapSocket.on('convoy_location_update', handleLocationUpdate);
     return () => { mapSocket.off('convoy_location_update', handleLocationUpdate); };
   }, [username]);
 
-  // 🔥 2. GPS REAL (Reemplaza a la simulación anterior)
+  // 3. GPS EN TIEMPO REAL
   useEffect(() => {
     if (!navigator.geolocation) {
       setGpsReady(true);
@@ -164,17 +199,24 @@ export default function MapScreen({ onOpenAuth, username, onTravelChange, incomi
 
         if (isTravelingRef.current) {
           
-          // ✨ MAGIA: Si tenemos ruta, nos "pegamos" a ella y leemos su dirección
           if (routeDataRef.current && routeDataRef.current.geometry.coordinates) {
             const snap = snapToRoute(coords, routeDataRef.current.geometry.coordinates);
             finalCoords = snap.coords;
-            if (snap.bearing !== null) heading = snap.bearing; // Sustituimos la brújula por la carretera
+            
+            if (snap.bearing !== null) {
+              heading = snap.bearing; // Estamos dentro de la carretera
+            } else {
+              // 🔥 NOS HEMOS SALIDO DE LA RUTA (Se activa el recálculo)
+              if (!isReroutingRef.current) {
+                isReroutingRef.current = true;
+                recalculateRoute(coords);
+              }
+            }
           }
 
           setCarPosition(finalCoords);
           setCurrentSpeed(speed);
 
-          // Actualizamos cámara (Solo si el usuario no toca la pantalla)
           if (!userExploringRef.current) {
             setViewState(prev => ({
               ...prev,
@@ -184,11 +226,10 @@ export default function MapScreen({ onOpenAuth, username, onTravelChange, incomi
               pitch: 60,
               zoom: 17,
               padding: { top: 350, bottom: 0, left: 0, right: 0 },
-              transitionDuration: 1000 // ✨ Suaviza el salto de la cámara
+              transitionDuration: 1000 
             }));
           }
 
-          // Emitimos al convoy
           if (activeConvoyRef.current && username) {
             mapSocket.emit('update_location', {
               roomId: activeConvoyRef.current.chatId,
@@ -198,22 +239,13 @@ export default function MapScreen({ onOpenAuth, username, onTravelChange, incomi
               speed: speed
             });
           }
-
-        // ... (resto del código de isTravelingRef.current) ...
-
         } else {
-          // ✅ Solo actualizamos el punto cyan, pero NO arrastramos la cámara...
           setCarPosition(finalCoords);
-          
-          // 🔥 NUEVO: ...EXCEPTO si es la primera vez que abrimos la app, entonces te enfocamos
           if (isFirstLoadRef.current) {
             setViewState(prev => ({ 
-              ...prev, 
-              longitude: finalCoords[0], 
-              latitude: finalCoords[1], 
-              zoom: 15 
+              ...prev, longitude: finalCoords[0], latitude: finalCoords[1], zoom: 15 
             }));
-            isFirstLoadRef.current = false; // Apagamos el interruptor
+            isFirstLoadRef.current = false;
           }
         }
         
@@ -223,7 +255,7 @@ export default function MapScreen({ onOpenAuth, username, onTravelChange, incomi
         console.error("Error GPS:", error);
         setGpsReady(true);
       }, 
-      { enableHighAccuracy: true, maximumAge: 0 } // Máxima precisión real-time
+      { enableHighAccuracy: true, maximumAge: 0 }
     );
 
     return () => navigator.geolocation.clearWatch(watchId);
@@ -234,7 +266,7 @@ export default function MapScreen({ onOpenAuth, username, onTravelChange, incomi
     if (incomingRoute && incomingRoute.routeData) {
       setWaypoints(incomingRoute.routeData.waypoints);
       setActiveConvoy({ host: incomingRoute.senderName, chatId: incomingRoute.chatId }); 
-      mapSocket.emit('join_room', incomingRoute.chatId); // 🔥 Conectamos al socket room
+      mapSocket.emit('join_room', incomingRoute.chatId); 
       calculateFullRoute(incomingRoute.routeData.waypoints);
       if (onRouteLoaded) onRouteLoaded();
     }
@@ -354,6 +386,7 @@ export default function MapScreen({ onOpenAuth, username, onTravelChange, incomi
       
       if (data.routes && data.routes.length > 0) {
         const route = data.routes[0];
+
         setRouteData({
           geometry: route.geometry,
           duration: route.duration,
@@ -412,14 +445,11 @@ export default function MapScreen({ onOpenAuth, username, onTravelChange, incomi
     mapSocket.emit('send_message', msgData);
     setShowShareModal(false);
     
-    // 🔥 Entramos nosotros mismos a la sala para emitir ubicacion
     setActiveConvoy({ host: username || 'Mí', chatId: actualChatId });
     mapSocket.emit('join_room', actualChatId); 
-    
     startTravel(); 
   };
 
-  // 🔥 3. PARAR EL VIAJE
   const stopTravel = () => {
     setIsTraveling(false); 
     onTravelChange?.(false);
@@ -429,7 +459,7 @@ export default function MapScreen({ onOpenAuth, username, onTravelChange, incomi
     setRouteData(null); 
     setIsPlannerOpen(false); 
     setWaypointNotice(null);
-    setConvoyMembers({}); // Limpiamos a los amigos
+    setConvoyMembers({}); 
     
     if (autoCenterTimeoutRef.current) clearTimeout(autoCenterTimeoutRef.current);
     
@@ -437,7 +467,6 @@ export default function MapScreen({ onOpenAuth, username, onTravelChange, incomi
     setActiveConvoy(null); 
   };
 
-  // 🔥 4. EMPEZAR VIAJE (Sin requestAnimationFrame)
   const startTravel = () => {
     if (!routeData) return;
     setIsTraveling(true); 
@@ -445,37 +474,33 @@ export default function MapScreen({ onOpenAuth, username, onTravelChange, incomi
     setIsPlannerOpen(false); 
     setUserIsExploring(false);
     userExploringRef.current = false;
-    passedWaypointsRef.current.clear();
     
-    // 🔥 ANIMACIÓN CINEMÁTICA INMEDIATA AL INICIAR
     if (routeData.geometry && routeData.geometry.coordinates.length > 1) {
-      // Calculamos hacia dónde mira el primer tramo de la ruta
       const initialBearing = getBearing(
         routeData.geometry.coordinates[0], 
         routeData.geometry.coordinates[1]
       );
       
-      // Animamos la cámara bajando en picado hacia el coche
       setViewState(prev => ({
         ...prev,
         longitude: carPosition[0],
         latitude: carPosition[1],
         zoom: 17,
         pitch: 60,
-        bearing: initialBearing, // Giramos la cámara hacia la carretera
+        bearing: initialBearing,
         padding: { top: 350, bottom: 0, left: 0, right: 0 },
-        transitionDuration: 1500 // 1.5 segundos de caída cinematográfica
+        transitionDuration: 1500
       }));
     }
   };
 
   const handleInteractionStart = () => { if (!isTraveling) return; setUserIsExploring(true); userExploringRef.current = true; if (autoCenterTimeoutRef.current) clearTimeout(autoCenterTimeoutRef.current); };
   const handleInteractionEnd = () => { if (!isTraveling) return; autoCenterTimeoutRef.current = setTimeout(() => forceCenterCamera(), 4000); };
+  
   const forceCenterCamera = () => { 
     setUserIsExploring(false); 
     userExploringRef.current = false; 
 
-    // 🔥 Forzamos la cámara instantáneamente (por si el coche está parado)
     setViewState(prev => ({
       ...prev,
       longitude: carPosition[0],
@@ -483,7 +508,7 @@ export default function MapScreen({ onOpenAuth, username, onTravelChange, incomi
       zoom: 17,
       pitch: 60,
       padding: { top: 350, bottom: 0, left: 0, right: 0 },
-      transitionDuration: 1000 // Animación suave de 1 segundo
+      transitionDuration: 1000
     }));
   };
 
@@ -494,46 +519,35 @@ export default function MapScreen({ onOpenAuth, username, onTravelChange, incomi
       
       <Map ref={mapRef} {...viewState} onMove={evt => setViewState(evt.viewState)} onDragStart={handleInteractionStart} onDragEnd={handleInteractionEnd} onZoomStart={handleInteractionStart} onZoomEnd={handleInteractionEnd} mapStyle="mapbox://styles/mapbox/dark-v11" mapboxAccessToken={MAPBOX_TOKEN} interactive={true}>
         
-        {/* 🔥 RENDERIZADO DINÁMICO DE LOS AMIGOS REALES */}
+        {/* RENDERIZADO DE AMIGOS EN EL CONVOY */}
         {Object.entries(convoyMembers).map(([friendName, data]) => (
           <Marker key={friendName} longitude={data.coords[0]} latitude={data.coords[1]}>
             <div style={{ 
-              transform: `rotate(${data.bearing - viewState.bearing}deg)`, // Ajustamos para que apunten a su dirección frente a nuestra rotación
-              transition: 'transform 0.5s ease, top 1s linear, left 1s linear' // Suaviza los saltos del GPS
+              transform: `rotate(${data.bearing - viewState.bearing}deg)`, 
+              transition: 'transform 0.5s ease, top 1s linear, left 1s linear' 
             }}>
               <svg width="44" height="44" viewBox="0 0 32 32" fill="none" style={{ filter: 'drop-shadow(0px 8px 12px rgba(176, 38, 255, 0.7))' }}>
                 <path d="M16 2L30 30L16 22L2 30L16 2Z" fill="#B026FF" stroke="#FFFFFF" strokeWidth="2.5" strokeLinejoin="round"/>
               </svg>
-              <div style={{ 
-                position: 'absolute', top: '45px', left: '50%', transform: 'translateX(-50%)', 
-                background: 'rgba(0,0,0,0.6)', color: '#B026FF', padding: '2px 8px', 
-                borderRadius: '10px', fontSize: '11px', fontWeight: 'bold', whiteSpace: 'nowrap'
-              }}>
+              <div style={{ position: 'absolute', top: '45px', left: '50%', transform: 'translateX(-50%)', background: 'rgba(0,0,0,0.6)', color: '#B026FF', padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: 'bold', whiteSpace: 'nowrap' }}>
                 {friendName}
               </div>
             </div>
           </Marker>
         ))}
 
-        {/* TU COCHE */}
-        <Marker longitude={carPosition[0]} latitude={carPosition[1]}>
-          {isTraveling ? (
-            <svg width="44" height="44" viewBox="0 0 32 32" fill="none" style={{ filter: 'drop-shadow(0px 8px 12px rgba(0,255,204,0.7))' }}>
-              <path d="M16 2L30 30L16 22L2 30L16 2Z" fill="#00FFCC" stroke="#FFFFFF" strokeWidth="2.5" strokeLinejoin="round"/>
-            </svg>
-          ) : (
-            // 🔥 NUEVO: Punto verde/cyan minimalista estilo radar
-            <div style={{
-              width: '20px', 
-              height: '20px', 
-              borderRadius: '50%', 
-              background: '#00FFCC',
-              border: '3px solid rgba(255, 255, 255, 0.9)', 
-              boxShadow: '0 0 15px #00FFCC, 0 0 30px rgba(0, 255, 204, 0.5)',
-              zIndex: 10
-            }} />
-          )}
-        </Marker>
+        {/* 🚗 TU COCHE: Si estás aparcado O explorando libremente el mapa */}
+        {(!isTraveling || userIsExploring) && (
+          <Marker longitude={carPosition[0]} latitude={carPosition[1]}>
+            {isTraveling ? (
+              <svg width="44" height="44" viewBox="0 0 32 32" fill="none" style={{ filter: 'drop-shadow(0px 8px 12px rgba(0,255,204,0.7))' }}>
+                <path d="M16 2L30 30L16 22L2 30L16 2Z" fill="#00FFCC" stroke="#FFFFFF" strokeWidth="2.5" strokeLinejoin="round"/>
+              </svg>
+            ) : (
+              <div style={{ width: '20px', height: '20px', borderRadius: '50%', background: '#00FFCC', border: '3px solid rgba(255, 255, 255, 0.9)', boxShadow: '0 0 15px #00FFCC, 0 0 30px rgba(0, 255, 204, 0.5)', zIndex: 10 }} />
+            )}
+          </Marker>
+        )}
 
         {waypoints.map((wp, index) => {
           if (!wp.coords || index === 0) return null; 
@@ -551,7 +565,16 @@ export default function MapScreen({ onOpenAuth, username, onTravelChange, incomi
         )}
       </Map>
 
-      {/* --- PANELES DEL MAPA (IGUAL QUE ANTES) --- */}
+      {/* 🚀 EL TRUCO DE LOS 60 FPS: El Avatar Flotante Fijo */}
+      {isTraveling && !userIsExploring && (
+        <div style={{ position: 'absolute', top: 'calc(50% + 175px)', left: '50%', transform: 'translate(-50%, -50%)', zIndex: 50, pointerEvents: 'none' }}>
+          <svg width="54" height="54" viewBox="0 0 32 32" fill="none" style={{ filter: 'drop-shadow(0px 8px 15px rgba(0,255,204,0.8))' }}>
+            <path d="M16 2L30 30L16 22L2 30L16 2Z" fill="#00FFCC" stroke="#FFFFFF" strokeWidth="2.5" strokeLinejoin="round"/>
+          </svg>
+        </div>
+      )}
+
+      {/* --- PANTALLA PRINCIPAL / BUSCADOR --- */}
       {!isTraveling && !isPlannerOpen && !routeData && (
         <div style={{ position: 'absolute', top: 24, left: '50%', transform: 'translateX(-50%)', width: '92%', maxWidth: '420px', zIndex: 10 }}>
           <div style={{ ...ultraGlassStyle, padding: '12px 20px', display: 'flex', alignItems: 'center', gap: '12px' }}>
