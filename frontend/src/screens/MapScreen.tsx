@@ -120,6 +120,7 @@ export default function MapScreen({ onOpenAuth, username, onTravelChange, incomi
   const userExploringRef = useRef<boolean>(false);
   const autoCenterTimeoutRef = useRef<any>(null);
   const passedWaypointsRef = useRef<Set<string>>(new Set());
+  const isFirstLoadRef = useRef(true);
 
   // Refs de estado para el GPS real (así no recreamos el Listener de GPS)
   const isTravelingRef = useRef(isTraveling);
@@ -138,7 +139,7 @@ export default function MapScreen({ onOpenAuth, username, onTravelChange, incomi
         setConvoyMembers(prev => ({
           ...prev,
           [data.username]: { coords: data.coords, bearing: data.bearing, speed: data.speed }
-        }));
+        }));navigator.geolocation.getCurrentPosition
       }
     };
     mapSocket.on('convoy_location_update', handleLocationUpdate);
@@ -201,8 +202,19 @@ export default function MapScreen({ onOpenAuth, username, onTravelChange, incomi
         // ... (resto del código de isTravelingRef.current) ...
 
         } else {
-          // ✅ Solo actualizamos el punto cyan, pero NO arrastramos la cámara
+          // ✅ Solo actualizamos el punto cyan, pero NO arrastramos la cámara...
           setCarPosition(finalCoords);
+          
+          // 🔥 NUEVO: ...EXCEPTO si es la primera vez que abrimos la app, entonces te enfocamos
+          if (isFirstLoadRef.current) {
+            setViewState(prev => ({ 
+              ...prev, 
+              longitude: finalCoords[0], 
+              latitude: finalCoords[1], 
+              zoom: 15 
+            }));
+            isFirstLoadRef.current = false; // Apagamos el interruptor
+          }
         }
         
         setGpsReady(true);
