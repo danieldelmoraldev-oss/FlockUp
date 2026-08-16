@@ -8,7 +8,7 @@ import {
 } from 'react-icons/io5';
 import { io } from 'socket.io-client';
 
-const mapSocket = io('/', { path: '/socket.io' });
+const mapSocket = io(import.meta.env.VITE_SOCKET_URL);
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN; 
 const START_POINT = [-3.7038, 40.4168]; 

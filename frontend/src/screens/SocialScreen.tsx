@@ -14,9 +14,8 @@ interface SocialScreenProps {
 const screenStyle: React.CSSProperties = { width: '100%', height: '100%', backgroundColor: '#0B0F19', color: 'white', display: 'flex', flexDirection: 'column', boxSizing: 'border-box', paddingBottom: '80px', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' };
 const fixedScreenStyle: React.CSSProperties = { ...screenStyle, position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(11, 15, 25, 0.98)', padding: '60px 24px 100px 24px', zIndex: 40 };
 
-// Al no pasarle URL, Socket.io detecta automáticamente 
-// el dominio/IP en el que estás y Vite hará la magia.
-const socket = io('/', { path: '/socket.io' });
+// 🔥 Ahora apuntamos directamente a tu servidor de Render
+const socket = io(import.meta.env.VITE_SOCKET_URL);
 
 // 🔥 PUNTOS ANIMADOS REFINADOS PARA LA LISTA
 const TypingDots = () => (
