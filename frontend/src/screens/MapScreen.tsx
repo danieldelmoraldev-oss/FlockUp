@@ -198,8 +198,11 @@ export default function MapScreen({ onOpenAuth, username, onTravelChange, incomi
             });
           }
 
+        // ... (resto del código de isTravelingRef.current) ...
+
         } else {
-          setViewState(prev => ({ ...prev, longitude: coords[0], latitude: coords[1] }));
+          // ✅ Solo actualizamos el punto cyan, pero NO arrastramos la cámara
+          setCarPosition(finalCoords);
         }
         
         setGpsReady(true);
@@ -432,13 +435,45 @@ export default function MapScreen({ onOpenAuth, username, onTravelChange, incomi
     userExploringRef.current = false;
     passedWaypointsRef.current.clear();
     
-    // En cuanto cambie `isTraveling` a true, el `useEffect` del GPS de arriba
-    // se encargará él solo de mover el coche con cada coordenada física nueva.
+    // 🔥 ANIMACIÓN CINEMÁTICA INMEDIATA AL INICIAR
+    if (routeData.geometry && routeData.geometry.coordinates.length > 1) {
+      // Calculamos hacia dónde mira el primer tramo de la ruta
+      const initialBearing = getBearing(
+        routeData.geometry.coordinates[0], 
+        routeData.geometry.coordinates[1]
+      );
+      
+      // Animamos la cámara bajando en picado hacia el coche
+      setViewState(prev => ({
+        ...prev,
+        longitude: carPosition[0],
+        latitude: carPosition[1],
+        zoom: 17,
+        pitch: 60,
+        bearing: initialBearing, // Giramos la cámara hacia la carretera
+        padding: { top: 350, bottom: 0, left: 0, right: 0 },
+        transitionDuration: 1500 // 1.5 segundos de caída cinematográfica
+      }));
+    }
   };
 
   const handleInteractionStart = () => { if (!isTraveling) return; setUserIsExploring(true); userExploringRef.current = true; if (autoCenterTimeoutRef.current) clearTimeout(autoCenterTimeoutRef.current); };
   const handleInteractionEnd = () => { if (!isTraveling) return; autoCenterTimeoutRef.current = setTimeout(() => forceCenterCamera(), 4000); };
-  const forceCenterCamera = () => { setUserIsExploring(false); userExploringRef.current = false; };
+  const forceCenterCamera = () => { 
+    setUserIsExploring(false); 
+    userExploringRef.current = false; 
+
+    // 🔥 Forzamos la cámara instantáneamente (por si el coche está parado)
+    setViewState(prev => ({
+      ...prev,
+      longitude: carPosition[0],
+      latitude: carPosition[1],
+      zoom: 17,
+      pitch: 60,
+      padding: { top: 350, bottom: 0, left: 0, right: 0 },
+      transitionDuration: 1000 // Animación suave de 1 segundo
+    }));
+  };
 
   if (!gpsReady) return <div style={{ width: '100%', height: '100%', backgroundColor: '#0B0D14', color: '#00FFCC', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>Conectando GPS...</div>;
 
@@ -475,7 +510,16 @@ export default function MapScreen({ onOpenAuth, username, onTravelChange, incomi
               <path d="M16 2L30 30L16 22L2 30L16 2Z" fill="#00FFCC" stroke="#FFFFFF" strokeWidth="2.5" strokeLinejoin="round"/>
             </svg>
           ) : (
-            <div style={{ fontSize: '32px', filter: 'drop-shadow(0px 6px 10px rgba(0,255,204,0.6))', zIndex: 10 }}>🚘</div>
+            // 🔥 NUEVO: Punto verde/cyan minimalista estilo radar
+            <div style={{
+              width: '20px', 
+              height: '20px', 
+              borderRadius: '50%', 
+              background: '#00FFCC',
+              border: '3px solid rgba(255, 255, 255, 0.9)', 
+              boxShadow: '0 0 15px #00FFCC, 0 0 30px rgba(0, 255, 204, 0.5)',
+              zIndex: 10
+            }} />
           )}
         </Marker>
 
