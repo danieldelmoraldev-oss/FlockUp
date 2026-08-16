@@ -226,7 +226,9 @@ export default function MapScreen({ onOpenAuth, username, onTravelChange, incomi
               pitch: 60,
               zoom: 17,
               padding: { top: 350, bottom: 0, left: 0, right: 0 },
-              transitionDuration: 1000 
+              transitionDuration: 1000, // Exactamente 1 segundo (el latido del GPS)
+              // @ts-ignore
+              transitionEasing: (t: number) => t // 🔥 ARREGLO: Movimiento lineal constante a 60FPS
             }));
           }
 
