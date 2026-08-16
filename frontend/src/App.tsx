@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import MapScreen from './screens/MapScreen'; 
 import SocialScreen from './screens/SocialScreen';
 import BottomNav from './components/BottomNav';

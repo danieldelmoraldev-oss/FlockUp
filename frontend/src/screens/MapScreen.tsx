@@ -22,10 +22,6 @@ const getBearing = (start: number[], end: number[]) => {
   const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(lon2 - lon1);
   return ((Math.atan2(y, x) * (180 / Math.PI)) + 360) % 360;
 };
-
-const getDistance = (start: number[], end: number[]) => {
-  return Math.sqrt(Math.pow(end[0] - start[0], 2) + Math.pow(end[1] - start[1], 2));
-};
 // 🔥 1. MAGIA SNAP-TO-ROAD (Debajo de getDistance)
 const sqDist = (p1: number[], p2: number[]) => Math.pow(p1[0] - p2[0], 2) + Math.pow(p1[1] - p2[1], 2);
 
